@@ -37,4 +37,5 @@ python ui.py
 
 ## URL GitHub Repository
 
-zip file added https://github.com/stelios-tsig/Recipe-Project.git
+zip file added ----  https://github.com/stelios-tsig/Recipe-Project.git
+.exe file added (release v1,0) ---- https://github.com/stelios-tsig/Recipe-Project/releases/tag/v1%2C0
