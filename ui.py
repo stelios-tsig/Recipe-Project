@@ -37,7 +37,7 @@ def recipe_to_dict(recipe) -> dict:
         "category": recipe.category,
         "difficulty": recipe.difficulty,
         "time_minutes": recipe.total_duration,
-        "servings": 4,  # default - δεν υπάρχει στη βάση ακόμα
+        "servings": recipe.servings,
         "image_path": None,
         "ingredients": [
             {"name": ing.name, "amount": ing.amount}
@@ -122,10 +122,15 @@ lbl(home, "Κατηγοριες", font=("Helvetica",18,"bold")).pack(pady=(24,8)
 cats_outer = ctk.CTkFrame(home, fg_color=CAT_BG, corner_radius=10)
 cats_outer.pack(padx=60, pady=(0,30))
 
-for idx, cat in enumerate(CATEGORIES):
-    btn(cats_outer, cat, width=180, height=180, font=("Helvetica",15,"bold"),
-        fg=DARK, hov=DARK_H, corner_radius=8, cmd=lambda c=cat: open_list(c)
-        ).grid(row=idx//2, column=idx%2, padx=16, pady=16)
+def render_home_categories():
+    for w in cats_outer.winfo_children(): w.destroy()
+    dynamic_categories = manager.get_categories()
+    for idx, cat in enumerate(dynamic_categories):
+        btn(cats_outer, cat, width=180, height=180, font=("Helvetica",15,"bold"),
+            fg=DARK, hov=DARK_H, corner_radius=8, cmd=lambda c=cat: open_list(c)
+            ).grid(row=idx//2, column=idx%2, padx=16, pady=16)
+
+render_home_categories()
 
 
 list_page = ctk.CTkFrame(app, fg_color="#FFFFFF"); list_page.place(relwidth=1, relheight=1)
@@ -224,8 +229,11 @@ def confirm_delete(r):
     row = frm(d); row.pack()
     btn(row,"Ακυρωση",width=96,fg=GRAY_C,hov="#5a6268",cmd=d.destroy).pack(side="left",padx=7)
     def do_delete():
+        old_categories = manager.get_categories()
         manager.delete_recipe(r["id"]) # Διαγραφή από τη βάση δεδομένων
-        RECIPES.remove(r) # Διαγραφή από τη λίστα του UI
+        refresh_recipes()
+        if set(manager.get_categories()) != set(old_categories):
+            render_home_categories()
         render_list() # Ενημέρωση της λίστας
         d.destroy()
     btn(row,"Διαγραφη",width=96,fg=DEL_C,hov="#A93226",
@@ -344,7 +352,21 @@ e_next.pack(side="left",padx=8)
 _es = {"r":None,"i":0}
 
 def _erender():
-    r=_es["r"]; i=_es["i"]; steps=r["steps"]; total=len(steps); s=steps[i]
+    r=_es["r"]; i=_es["i"]; steps=r["steps"]; total=len(steps)
+    if total == 0:
+        e_title.configure(text=r["name"])
+        e_count.configure(text="0 / 0")
+        e_prog.set(0)
+        e_num.configure(text="ΔΕΝ ΥΠΑΡΧΟΥΝ ΒΗΜΑΤΑ")
+        e_stitle.configure(text="")
+        e_dur.configure(text="")
+        e_desc.configure(text="Αυτή η συνταγή δεν έχει βήματα εκτέλεσης.")
+        e_ib.pack_forget()
+        e_prev.configure(state="disabled")
+        e_next.configure(text="Τελος", command=lambda: show(detail_page))
+        return
+
+    s=steps[i]
     e_title.configure(text=r["name"]); e_count.configure(text=f"{i+1} / {total}")
     e_prog.set((i+1)/total); e_num.configure(text=f"ΒΗΜΑ {i+1}")
     e_stitle.configure(text=s["title"])
@@ -473,6 +495,7 @@ def _collect():
 def _save():
     data = _collect()
     if not data: return
+    old_categories = manager.get_categories()
     r = _er[0]
 
     # Μετατροπή UI format σε Model format
@@ -490,11 +513,15 @@ def _save():
         })
 
     if r:
-        # Ενημέρωση υπάρχουσας συνταγής (βασικά στοιχεία)
-        manager.update_recipe_basic(
+        # Ενημέρωση υπάρχουσας συνταγής (πλήρης ενημέρωση)
+        success, error = manager.update_full_recipe(
             r["id"], data["name"], data["category"],
-            data["difficulty"], data["time_minutes"]
+            data["difficulty"], data["time_minutes"], data["servings"],
+            ingredients_list, steps_list
         )
+        if not success:
+            print(f"Σφάλμα κατά την ενημέρωση: {error}")
+            return
 
     else:
         # Δημιουργία νέας
@@ -503,6 +530,7 @@ def _save():
             category=data["category"],
             difficulty=data["difficulty"],
             total_duration=data["time_minutes"],
+            servings=data["servings"],
             ingredients_list=ingredients_list,
             steps_list=steps_list
         )
@@ -512,6 +540,11 @@ def _save():
 
     _er[0] = None
     refresh_recipes()
+
+    # Αν προστέθηκε νέα κατηγορία, ανανέωση της αρχικής οθόνης
+    if set(manager.get_categories()) != set(old_categories):
+        render_home_categories()
+
     render_list()
     show(list_page)
 
@@ -528,8 +561,13 @@ def open_add():
 def open_edit(r):
     _er[0]=r; a_title.configure(text="Επεξεργασια")
     def do_delete():
+        old_categories = manager.get_categories()
         manager.delete_recipe(r["id"])
         refresh_recipes()
+
+        if set(manager.get_categories()) != set(old_categories):
+            render_home_categories()
+
         render_list()
         show(list_page)
         a_del_btn.pack_forget()

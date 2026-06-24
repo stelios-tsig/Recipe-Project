@@ -40,9 +40,17 @@ def setup_database():
         title TEXT NOT NULL,
         category TEXT,
         difficulty TEXT,
-        total_duration INTEGER
+        total_duration INTEGER,
+        servings INTEGER DEFAULT 4
     )
     ''')
+
+    # Προσθήκη στήλης servings αν δεν υπάρχει (για υπάρχουσες βάσεις)
+    try:
+        cursor.execute("ALTER TABLE Recipes ADD COLUMN servings INTEGER DEFAULT 4")
+    except sqlite3.OperationalError:
+        # Η στήλη υπάρχει ήδη
+        pass
 
     cursor.execute('''CREATE TABLE IF NOT EXISTS Steps(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,16 +98,16 @@ def setup_database():
 
 
 
-def save_new_recipe(title, category, difficulty, duration):
+def save_new_recipe(title, category, difficulty, duration, servings=4):
     db_path = get_db_path()
     connection = sqlite3.connect(db_path)
     cursor = connection.cursor()
 
     try:
         cursor.execute("""
-            INSERT INTO Recipes (title, category, difficulty, total_duration)
-            VALUES (?,?,?,?)
-            """, (title , category, difficulty, duration))
+            INSERT INTO Recipes (title, category, difficulty, total_duration, servings)
+            VALUES (?,?,?,?,?)
+            """, (title , category, difficulty, duration, servings))
 
         recipe_id = cursor.lastrowid
         connection.commit()
@@ -378,7 +386,7 @@ def clear_recipe_ingredients(recipe_id):
         connection.close() 
 
 
-def update_recipe(recipe_id, title, category, difficulty, duration):
+def update_recipe(recipe_id, title, category, difficulty, duration, servings=4):
     db_path = get_db_path()
     connection = sqlite3.connect(db_path)
     cursor = connection.cursor()
@@ -386,9 +394,9 @@ def update_recipe(recipe_id, title, category, difficulty, duration):
     try:
         cursor.execute("""
             UPDATE Recipes
-            SET title = ?, category = ?, difficulty = ?, total_duration = ?
+            SET title = ?, category = ?, difficulty = ?, total_duration = ?, servings = ?
             WHERE id = ?
-        """, (title, category, difficulty, duration, recipe_id))
+        """, (title, category, difficulty, duration, servings, recipe_id))
 
         connection.commit()
         print(f"Η συνταγή '{title}' ενημερώθηκε επιτυχώς!")
@@ -528,13 +536,14 @@ def save_full_recipe(recipe_dict):
 
         # 1) Αποθήκευση συνταγής
         cursor.execute("""
-            INSERT INTO Recipes (title, category, difficulty, total_duration)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO Recipes (title, category, difficulty, total_duration, servings)
+            VALUES (?, ?, ?, ?, ?)
         """, (
             recipe_dict["title"],
             recipe_dict.get("category", ""),
             recipe_dict.get("difficulty", ""),
-            recipe_dict.get("total_duration", 0)
+            recipe_dict.get("total_duration", 0),
+            recipe_dict.get("servings", 4)
         ))
         recipe_id = cursor.lastrowid
 
@@ -590,6 +599,88 @@ def save_full_recipe(recipe_dict):
         connection.close()
 
 
+def update_full_recipe(recipe_id, recipe_dict):
+    """
+    Ενημερώνει μια πλήρη συνταγή (βασικά στοιχεία, υλικά και βήματα) σε ένα transaction.
+    Αντικαθιστά τα παλιά υλικά και βήματα με τα νέα.
+    """
+    db_path = get_db_path()
+    connection = sqlite3.connect(db_path)
+    cursor = connection.cursor()
+
+    try:
+        cursor.execute("PRAGMA foreign_keys = ON")
+
+        # 1) Ενημέρωση βασικών στοιχείων συνταγής
+        cursor.execute("""
+            UPDATE Recipes
+            SET title = ?, category = ?, difficulty = ?, total_duration = ?, servings = ?
+            WHERE id = ?
+        """, (
+            recipe_dict["title"],
+            recipe_dict.get("category", ""),
+            recipe_dict.get("difficulty", ""),
+            recipe_dict.get("total_duration", 0),
+            recipe_dict.get("servings", 4),
+            recipe_id
+        ))
+
+        # 2) Διαγραφή παλιών υλικών και βημάτων (λόγω ON DELETE CASCADE τα Step_Ingredients και Recipe_Ingredients θα διαγραφούν)
+        cursor.execute("DELETE FROM Recipe_Ingredients WHERE recipe_id = ?", (recipe_id,))
+        cursor.execute("DELETE FROM Steps WHERE recipe_id = ?", (recipe_id,))
+
+        # 3) Αποθήκευση νέων υλικών συνταγής
+        for ing in recipe_dict.get("ingredients", []):
+            cursor.execute("INSERT OR IGNORE INTO Ingredients (name) VALUES (?)", (ing["name"],))
+            cursor.execute("SELECT id FROM Ingredients WHERE name = ?", (ing["name"],))
+            ing_id = cursor.fetchone()[0]
+            cursor.execute("""
+                INSERT INTO Recipe_Ingredients (recipe_id, ingredient_id, amount)
+                VALUES (?, ?, ?)
+            """, (recipe_id, ing_id, ing.get("amount", "")))
+
+        # 4) Αποθήκευση νέων βημάτων + υλικών βημάτων
+        for step in recipe_dict.get("steps", []):
+            cursor.execute("""
+                INSERT INTO Steps (recipe_id, step_number, title, instruction, time_hours, time_minutes)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                recipe_id,
+                step["step_number"],
+                step.get("title", ""),
+                step.get("instruction", ""),
+                str(step.get("time_hours", "")),
+                str(step.get("time_minutes", ""))
+            ))
+            step_id = cursor.lastrowid
+
+            for ing in step.get("ingredients", []):
+                cursor.execute("INSERT OR IGNORE INTO Ingredients (name) VALUES (?)", (ing["name"],))
+                cursor.execute("SELECT id FROM Ingredients WHERE name = ?", (ing["name"],))
+                ing_id = cursor.fetchone()[0]
+                cursor.execute("""
+                    INSERT INTO Step_Ingredients (step_id, ingredient_id, amount)
+                    VALUES (?, ?, ?)
+                """, (step_id, ing_id, ing.get("amount", "")))
+
+        connection.commit()
+        print(f" Η συνταγή με ID {recipe_id} ενημερώθηκε πλήρως.")
+        return True, None
+
+    except sqlite3.Error as e:
+        connection.rollback()
+        error_msg = f"Transaction failed: {e}"
+        print(f" {error_msg}")
+        return False, error_msg
+    except Exception as e:
+        connection.rollback()
+        error_msg = f"Unexpected error: {e}"
+        print(f" {error_msg}")
+        return False, error_msg
+    finally:
+        connection.close()
+
+
 def seed_database():
     """
     Γεμίζει τη βάση με demo δεδομένα αν είναι κενή.
@@ -605,6 +696,7 @@ def seed_database():
             "category": "Ψάρια",
             "difficulty": "Εύκολη",
             "total_duration": 25,
+            "servings": 2,
             "ingredients": [
                 {"name": "Φιλέτο ψαριού", "amount": "2 τεμ."},
                 {"name": "Λεμόνι", "amount": "1 τεμ."},
@@ -622,6 +714,7 @@ def seed_database():
             "category": "Ζυμαρικά",
             "difficulty": "Εύκολη",
             "total_duration": 40,
+            "servings": 4,
             "ingredients": [
                 {"name": "Σπαγγέτι", "amount": "500 γρ."},
                 {"name": "Κιμάς μοσχαρίσιος", "amount": "400 γρ."},
@@ -639,6 +732,7 @@ def seed_database():
             "category": "Κρέας",
             "difficulty": "Μέτρια",
             "total_duration": 90,
+            "servings": 6,
             "ingredients": [
                 {"name": "Μοσχαράκι", "amount": "800 γρ."},
                 {"name": "Κρεμμύδι", "amount": "2 μεγάλα"},
@@ -656,6 +750,7 @@ def seed_database():
             "category": "Φούρνος",
             "difficulty": "Εύκολη",
             "total_duration": 60,
+            "servings": 4,
             "ingredients": [
                 {"name": "Πατάτες", "amount": "1 κιλό"},
                 {"name": "Ελαιόλαδο", "amount": "1/2 φλ."},
@@ -673,6 +768,7 @@ def seed_database():
             "category": "Air Fryer",
             "difficulty": "Εύκολη",
             "total_duration": 35,
+            "servings": 2,
             "ingredients": [
                 {"name": "Κοτόπουλο φιλέτο", "amount": "2 τεμ."},
                 {"name": "Πάπρικα", "amount": "1 κ.γ."},
@@ -690,6 +786,7 @@ def seed_database():
             "category": "Vegan",
             "difficulty": "Εύκολη",
             "total_duration": 30,
+            "servings": 1,
             "ingredients": [
                 {"name": "Κινόα", "amount": "200 γρ."},
                 {"name": "Αβοκάντο", "amount": "1 τεμ."},

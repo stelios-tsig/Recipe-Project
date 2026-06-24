@@ -69,18 +69,19 @@ class Step:
 
 
 class Recipe:
-    def __init__(self, recipe_id, title, category, difficulty, total_duration):
+    def __init__(self, recipe_id, title, category, difficulty, total_duration, servings=4):
         self.recipe_id = recipe_id
         self.title = title
         self.category = category
         self.difficulty = difficulty
         self.total_duration = total_duration
+        self.servings = servings
         self.steps = []
         self.ingredients = []
 
     def __repr__(self):
         return (f"Recipe(id={self.recipe_id}, title={self.title!r}, "
-                f"category={self.category!r}, steps={len(self.steps)})")
+                f"category={self.category!r}, steps={len(self.steps)}, servings={self.servings})")
 
     def __str__(self):
         return f"{self.title} ({self.category}) — {self.difficulty}"
@@ -156,6 +157,7 @@ class Recipe:
             "category": self.category,
             "difficulty": self.difficulty,
             "total_duration": self.total_duration,
+            "servings": self.servings,
             "total_duration_text": self.get_total_duration_text(),
             "ingredients": [ing.to_dict() for ing in self.ingredients],
             "steps": [step.to_dict() for step in self.steps]
@@ -166,7 +168,7 @@ class Recipe:
     def save(self):
         """Αποθηκεύει μόνο τη βασική συνταγή (χωρίς βήματα/υλικά). Χρησιμοποιείστε RecipeManager.create_recipe() για πλήρη αποθήκευση."""
         recipe_id = Database.save_new_recipe(
-            self.title, self.category, self.difficulty, self.total_duration
+            self.title, self.category, self.difficulty, self.total_duration, self.servings
         )
         self.recipe_id = recipe_id
         return recipe_id
@@ -176,7 +178,7 @@ class Recipe:
 
     def update(self):
         Database.update_recipe(
-            self.recipe_id, self.title, self.category, self.difficulty, self.total_duration
+            self.recipe_id, self.title, self.category, self.difficulty, self.total_duration, self.servings
         )
 
 
@@ -220,7 +222,8 @@ class RecipeManager:
         rows = Database.get_recipes_by_category(category)
         recipes = []
         for row in rows:
-            recipe = Recipe(row[0], row[1], row[2], row[3], row[4])
+            # Columns: id(0), title(1), category(2), difficulty(3), total_duration(4), servings(5)
+            recipe = Recipe(row[0], row[1], row[2], row[3], row[4], row[5])
             recipe.load_details()
             recipes.append(recipe)
         return recipes
@@ -232,7 +235,7 @@ class RecipeManager:
         rows = Database.get_all_recipes()
         recipes = []
         for row in rows:
-            recipe = Recipe(row[0], row[1], row[2], row[3], row[4])
+            recipe = Recipe(row[0], row[1], row[2], row[3], row[4], row[5])
             recipe.load_details()
             recipes.append(recipe)
         return recipes
@@ -244,7 +247,7 @@ class RecipeManager:
         row = Database.get_recipe_by_id(recipe_id)
         if not row:
             return None
-        recipe = Recipe(row[0], row[1], row[2], row[3], row[4])
+        recipe = Recipe(row[0], row[1], row[2], row[3], row[4], row[5])
         recipe.load_details()
         return recipe
 
@@ -259,12 +262,12 @@ class RecipeManager:
 
         recipes = []
         for row in rows:
-            recipe = Recipe(row[0], row[1], row[2], row[3], row[4])
+            recipe = Recipe(row[0], row[1], row[2], row[3], row[4], row[5])
             recipe.load_details()
             recipes.append(recipe)
         return recipes
 
-    def create_recipe(self, title, category, difficulty, total_duration, ingredients_list, steps_list):
+    def create_recipe(self, title, category, difficulty, total_duration, servings, ingredients_list, steps_list):
         """
         Δημιουργεί και αποθηκεύει μια ΠΛΗΡΗ συνταγή σε ένα transaction.
 
@@ -283,7 +286,7 @@ class RecipeManager:
         Επιστρέφει (Recipe, None) ή (None, error_message).
         """
         # Validation
-        temp_recipe = Recipe(None, title, category, difficulty, total_duration)
+        temp_recipe = Recipe(None, title, category, difficulty, total_duration, servings)
         errors = temp_recipe.validate()
         if errors:
             return None, " ".join(errors)
@@ -296,6 +299,7 @@ class RecipeManager:
             "category": category,
             "difficulty": difficulty,
             "total_duration": total_duration,
+            "servings": servings,
             "ingredients": ingredients_list,
             "steps": steps_list
         }
@@ -316,14 +320,30 @@ class RecipeManager:
             print(f"Σφάλμα διαγραφής: {e}")
             return False
 
-    def update_recipe_basic(self, recipe_id, title, category, difficulty, total_duration):
+    def update_recipe_basic(self, recipe_id, title, category, difficulty, total_duration, servings):
         """Ενημερώνει τα βασικά στοιχεία μιας συνταγής."""
         try:
-            Database.update_recipe(recipe_id, title, category, difficulty, total_duration)
+            Database.update_recipe(recipe_id, title, category, difficulty, total_duration, servings)
             return True
         except Exception as e:
             print(f"Σφάλμα ενημέρωσης: {e}")
             return False
+
+    def update_full_recipe(self, recipe_id, title, category, difficulty, total_duration, servings, ingredients_list, steps_list):
+        """
+        Ενημερώνει μια ΠΛΗΡΗ συνταγή σε ένα transaction.
+        """
+        recipe_dict = {
+            "title": title,
+            "category": category,
+            "difficulty": difficulty,
+            "total_duration": total_duration,
+            "servings": servings,
+            "ingredients": ingredients_list,
+            "steps": steps_list
+        }
+        success, err = Database.update_full_recipe(recipe_id, recipe_dict)
+        return success, err
 
     def get_recipe_count(self):
         """Επιστρέφει τον συνολικό αριθμό συνταγών."""
